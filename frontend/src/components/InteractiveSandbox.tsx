@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { analyzeSentiment, type AnalyzeResult } from "@/lib/api";
+import { useEngine } from "@/lib/EngineContext";
 
 const LABEL_COLOR: Record<string, string> = {
   Positive: "text-secondary",
@@ -15,7 +16,7 @@ export default function InteractiveSandbox({
   onResult: (r: AnalyzeResult) => void;
 }) {
   const [text, setText] = useState("");
-  const [engine, setEngine] = useState("vader");
+  const { engine, setEngine } = useEngine();
   const [loading, setLoading] = useState(false);
   const [latest, setLatest] = useState<AnalyzeResult | null>(null);
   const [error, setError] = useState("");
@@ -44,7 +45,7 @@ export default function InteractiveSandbox({
         <div className="flex items-center gap-2">
           <select
             value={engine}
-            onChange={(e) => setEngine(e.target.value)}
+            onChange={(e) => setEngine(e.target.value as "vader" | "transformer")}
             className="bg-surface-container-lowest border border-outline-variant/30 rounded px-2 py-1 text-[10px] text-on-surface-variant font-bold uppercase focus:outline-none focus:border-primary"
           >
             <option value="vader">VADER</option>

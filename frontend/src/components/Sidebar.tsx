@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef, useState, useEffect, useCallback } from "react";
 import { uploadBatch, fetchBatchStatus, type BatchJobStatus } from "@/lib/api";
+import { useEngine } from "@/lib/EngineContext";
 
 const NAV_ITEMS = [
   { href: "/", icon: "dashboard", label: "Overview" },
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { engine } = useEngine();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<BatchJobStatus | null>(null);
@@ -42,14 +44,13 @@ export default function Sidebar() {
     setUploading(true);
     setActiveJob(null);
     try {
-      const res = await uploadBatch(file, "vader");
-      // Immediately start tracking
+      const res = await uploadBatch(file, engine);
       setActiveJob({
         job_id: res.job_id,
         status: "pending",
         total_rows: 0,
         processed_rows: 0,
-        engine_type: "vader",
+        engine_type: engine,
         error_message: null,
         created_at: new Date().toISOString(),
       });
@@ -170,20 +171,24 @@ export default function Sidebar() {
 
       <div className="px-3 border-t border-white/5 pt-6 space-y-1">
         <a
-          href="#"
+          href={(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + "/docs"}
+          target="_blank"
+          rel="noopener noreferrer"
           className="flex items-center gap-3 px-4 py-2 text-slate-500 hover:text-white text-sm transition-all"
         >
           <span className="material-symbols-outlined text-[18px]">
             description
           </span>
-          <span>Documentation</span>
+          <span>API Docs</span>
         </a>
         <a
-          href="#"
+          href="https://github.com/Furqan-N/AI-Sentiment-Analyzer"
+          target="_blank"
+          rel="noopener noreferrer"
           className="flex items-center gap-3 px-4 py-2 text-slate-500 hover:text-white text-sm transition-all"
         >
           <span className="material-symbols-outlined text-[18px]">help</span>
-          <span>Support</span>
+          <span>GitHub</span>
         </a>
       </div>
     </aside>

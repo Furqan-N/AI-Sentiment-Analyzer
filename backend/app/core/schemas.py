@@ -20,6 +20,7 @@ class AnalyzeResponse(BaseModel):
 
 class AnalyzeResponseWithTimestamp(AnalyzeResponse):
     id: int
+    text: str
     created_at: datetime
 
     model_config = {"from_attributes": True}

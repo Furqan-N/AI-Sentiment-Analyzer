@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEngine } from "@/lib/EngineContext";
 
 export default function TopBar() {
   const [connected, setConnected] = useState(false);
-  const [engine, setEngine] = useState<"vader" | "transformer">("vader");
+  const { engine, setEngine } = useEngine();
+  const router = useRouter();
 
   useEffect(() => {
-    fetch("http://localhost:8000/health")
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    fetch(`${apiBase}/health`)
       .then((r) => r.ok && setConnected(true))
       .catch(() => setConnected(false));
   }, []);
@@ -55,10 +59,18 @@ export default function TopBar() {
           {connected ? "Live Pulse" : "Offline"}
         </div>
         <div className="flex items-center gap-4 text-slate-400">
-          <button className="material-symbols-outlined hover:text-white transition-colors">
+          <button
+            onClick={() => router.push("/live-feed")}
+            title="Live Feed"
+            className="material-symbols-outlined hover:text-white transition-colors"
+          >
             sensors
           </button>
-          <button className="material-symbols-outlined hover:text-white transition-colors">
+          <button
+            onClick={() => router.push("/settings")}
+            title="Settings"
+            className="material-symbols-outlined hover:text-white transition-colors"
+          >
             settings
           </button>
           <div className="w-8 h-8 rounded-full bg-surface-container-highest flex items-center justify-center border border-outline-variant/30 text-xs font-bold text-primary">

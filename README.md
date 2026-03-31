@@ -23,11 +23,18 @@ A production-grade sentiment analysis platform with pluggable ML engines, real-t
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Recharts |
 | Infrastructure | Docker, Docker Compose |
 
+## Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended) **or**
+- Python 3.10+, Node.js 22+, and PostgreSQL 15+ for manual setup
+
 ## Quick Start
 
 ### Docker (Recommended)
 
 ```bash
+git clone https://github.com/Furqan-N/AI-Sentiment-Analyzer.git
+cd AI-Sentiment-Analyzer
 docker compose up --build
 ```
 
@@ -58,9 +65,15 @@ npm run dev                       # Dashboard on http://localhost:3000
 ### Seed Test Data
 
 ```bash
+# With Docker
+docker compose exec backend python seed_data.py
+
+# Without Docker
 cd backend
-python seed_data.py               # Inserts ~50 sample records spanning 7 days
+python seed_data.py
 ```
+
+This inserts ~50 sample records spanning 7 days to populate the analytics charts.
 
 ## API Endpoints
 
@@ -150,11 +163,15 @@ Batch CSV uploads show a live progress indicator in the sidebar with row-level t
 Run the built-in evaluation script to measure TransformerEngine accuracy:
 
 ```bash
+# With Docker
+docker compose exec backend python -m app.eval_metrics
+
+# Without Docker
 cd backend
 python -m app.eval_metrics
 ```
 
-This runs 20 labeled samples (10 positive, 10 negative) through DistilBERT and prints a classification report with Precision, Recall, F1, and accuracy.
+This runs 30 labeled samples (10 easy, 20 adversarial) through DistilBERT and prints a classification report with Precision, Recall, F1, and accuracy. The adversarial set includes sarcasm, double negation, and mixed-signal text to stress-test the model.
 
 ## Project Structure
 

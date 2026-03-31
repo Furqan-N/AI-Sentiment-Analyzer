@@ -17,6 +17,7 @@ export interface AnalyzeResult {
   score: number;
   engine_used: string;
   id: number;
+  text: string;
   created_at: string;
 }
 

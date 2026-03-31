@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-03-31
 **Transfer:** Claude Code (Opus 4.6) → Gemini
-**Project Root:** `C:\Users\Chess Master\AI-Sentiment-Analyzer`
+**Project Root:** `.`
 
 ---
 
@@ -276,7 +276,7 @@ typescript@5
 ### Docker (Recommended)
 
 ```bash
-cd "C:\Users\Chess Master\AI-Sentiment-Analyzer"
+cd "."
 docker compose up --build
 # PostgreSQL on :5432, Backend on :8000, Frontend on :3000
 ```
@@ -293,7 +293,7 @@ Default: `postgresql+asyncpg://postgres:postgres@localhost:5432/sentiment_db`
 ### Start the Server
 
 ```bash
-cd "C:\Users\Chess Master\AI-Sentiment-Analyzer\backend"
+cd "backend"
 pip install -r requirements.txt
 python main.py
 # Server starts on http://0.0.0.0:8000
@@ -303,7 +303,7 @@ python main.py
 ### Start the Frontend
 
 ```bash
-cd "C:\Users\Chess Master\AI-Sentiment-Analyzer\frontend"
+cd "frontend"
 npm install
 npm run dev
 # Frontend starts on http://localhost:3000
@@ -313,7 +313,7 @@ npm run dev
 ### Seed Test Data
 
 ```bash
-cd "C:\Users\Chess Master\AI-Sentiment-Analyzer\backend"
+cd "backend"
 python seed_data.py
 # Inserts ~50 fake records with timestamps spanning the last 7 days
 ```
@@ -321,7 +321,7 @@ python seed_data.py
 ### Run Evaluation
 
 ```bash
-cd "C:\Users\Chess Master\AI-Sentiment-Analyzer\backend"
+cd "backend"
 python -m app.eval_metrics
 # Runs 20 labeled samples through TransformerEngine, prints classification report
 ```

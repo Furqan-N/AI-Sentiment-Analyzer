@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { analyzeSentiment, type AnalyzeResult } from "@/lib/api";
+import { useEngine } from "@/lib/EngineContext";
 
 const LABEL_STYLES: Record<
   string,
@@ -37,7 +38,7 @@ function timeAgo(iso: string): string {
 export default function LiveFeedPage() {
   const [results, setResults] = useState<AnalyzeResult[]>([]);
   const [text, setText] = useState("");
-  const [engine, setEngine] = useState("vader");
+  const { engine, setEngine } = useEngine();
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<string>("all");
 
@@ -79,7 +80,7 @@ export default function LiveFeedPage() {
           />
           <select
             value={engine}
-            onChange={(e) => setEngine(e.target.value)}
+            onChange={(e) => setEngine(e.target.value as "vader" | "transformer")}
             className="bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-3 text-xs text-on-surface-variant font-bold uppercase focus:outline-none focus:border-primary"
           >
             <option value="vader">VADER</option>
@@ -148,8 +149,8 @@ export default function LiveFeedPage() {
                     className={`${style.bar} w-1 h-12 rounded-full shrink-0`}
                   />
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-on-surface">
-                      Analysis #{r.id}
+                    <div className="text-sm font-medium text-on-surface truncate max-w-md">
+                      &ldquo;{r.text}&rdquo;
                     </div>
                     <div className="text-[10px] text-on-surface-variant mt-1 flex items-center gap-2 flex-wrap">
                       <span className="font-bold">

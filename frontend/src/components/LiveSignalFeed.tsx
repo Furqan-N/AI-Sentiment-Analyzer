@@ -78,7 +78,7 @@ export default function LiveSignalFeed({
                   <div className={`${style.bar} w-1 h-10 rounded-full shrink-0`} />
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-on-surface truncate">
-                      &ldquo;{truncate(r.id.toString() + " — analyzed text", 80)}&rdquo;
+                      &ldquo;{truncate(r.text, 80)}&rdquo;
                     </div>
                     <div className="text-[10px] text-on-surface-variant mt-1 flex items-center gap-2">
                       <span className="font-bold">#{r.id}</span>
