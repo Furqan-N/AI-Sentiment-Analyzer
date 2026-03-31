@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-type EngineType = "vader" | "transformer";
+export type EngineType = "vader" | "transformer" | "roberta" | "ensemble";
 
 interface EngineContextValue {
   engine: EngineType;
@@ -10,12 +10,12 @@ interface EngineContextValue {
 }
 
 const EngineContext = createContext<EngineContextValue>({
-  engine: "vader",
+  engine: "ensemble",
   setEngine: () => {},
 });
 
 export function EngineProvider({ children }: { children: ReactNode }) {
-  const [engine, setEngine] = useState<EngineType>("vader");
+  const [engine, setEngine] = useState<EngineType>("ensemble");
   return (
     <EngineContext.Provider value={{ engine, setEngine }}>
       {children}

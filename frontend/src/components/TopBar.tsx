@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useEngine } from "@/lib/EngineContext";
+import { useEngine, type EngineType } from "@/lib/EngineContext";
+
+const ENGINE_TABS: { value: EngineType; label: string }[] = [
+  { value: "vader", label: "VADER" },
+  { value: "transformer", label: "DistilBERT" },
+  { value: "roberta", label: "RoBERTa" },
+  { value: "ensemble", label: "Ensemble" },
+];
 
 export default function TopBar() {
   const [connected, setConnected] = useState(false);
@@ -23,26 +30,19 @@ export default function TopBar() {
           Sentiment Engine v2.1
         </div>
         <nav className="hidden md:flex items-center gap-6">
-          <button
-            onClick={() => setEngine("vader")}
-            className={`font-bold uppercase tracking-widest text-[0.6875rem] pb-1 transition-colors ${
-              engine === "vader"
-                ? "text-blue-400 border-b-2 border-blue-400"
-                : "text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            VADER
-          </button>
-          <button
-            onClick={() => setEngine("transformer")}
-            className={`font-bold uppercase tracking-widest text-[0.6875rem] pb-1 transition-colors ${
-              engine === "transformer"
-                ? "text-blue-400 border-b-2 border-blue-400"
-                : "text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            Transformer
-          </button>
+          {ENGINE_TABS.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setEngine(tab.value)}
+              className={`font-bold uppercase tracking-widest text-[0.6875rem] pb-1 transition-colors ${
+                engine === tab.value
+                  ? "text-blue-400 border-b-2 border-blue-400"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </nav>
       </div>
       <div className="flex items-center gap-6">

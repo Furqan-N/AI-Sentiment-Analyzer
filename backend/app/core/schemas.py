@@ -7,8 +7,8 @@ class AnalyzeRequest(BaseModel):
     text: str = Field(..., min_length=1, description="The text to analyze for sentiment.")
     engine_type: str = Field(
         default="vader",
-        pattern="^(vader|transformer)$",
-        description="The engine to use: 'vader' or 'transformer'.",
+        pattern="^(vader|transformer|roberta|ensemble)$",
+        description="The engine to use: 'vader', 'transformer', 'roberta', or 'ensemble'.",
     )
 
 

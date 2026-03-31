@@ -45,7 +45,7 @@ async def analyze_batch(
     db: AsyncSession = Depends(get_db),
     engine_type: str = Query(
         default="vader",
-        pattern="^(vader|transformer)$",
+        pattern="^(vader|transformer|roberta|ensemble)$",
         description="The engine to use for all rows.",
     ),
 ) -> BatchResponse:

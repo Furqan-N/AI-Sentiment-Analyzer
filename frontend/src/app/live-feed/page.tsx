@@ -80,11 +80,13 @@ export default function LiveFeedPage() {
           />
           <select
             value={engine}
-            onChange={(e) => setEngine(e.target.value as "vader" | "transformer")}
+            onChange={(e) => setEngine(e.target.value as "vader" | "transformer" | "roberta" | "ensemble")}
             className="bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-3 text-xs text-on-surface-variant font-bold uppercase focus:outline-none focus:border-primary"
           >
             <option value="vader">VADER</option>
-            <option value="transformer">TRANSFORMER</option>
+            <option value="transformer">DISTILBERT</option>
+            <option value="roberta">ROBERTA</option>
+            <option value="ensemble">ENSEMBLE</option>
           </select>
           <button
             onClick={handleAnalyze}

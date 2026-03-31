@@ -1,8 +1,8 @@
 """
-Evaluation script for the TransformerEngine.
+Evaluation benchmark for all sentiment engines.
 
-Runs a small labeled dataset through DistilBERT and prints a classification
-report (Precision / Recall / F1).
+Runs a labeled dataset through each engine and prints a comparative
+classification report (Precision / Recall / F1 / Accuracy).
 
 Usage:
     cd backend
@@ -10,11 +10,16 @@ Usage:
 """
 
 import asyncio
+import time
 
+from app.engines.base import SentimentEngine
+from app.engines.vader_engine import VaderEngine
 from app.engines.transformer_engine import TransformerEngine
+from app.engines.roberta_engine import RobertaEngine
+from app.engines.ensemble_engine import EnsembleEngine
 
 # Labeled evaluation samples — mix of easy, ambiguous, and adversarial cases.
-# Ground truth labels follow SST-2 conventions (binary: Positive/Negative).
+# Ground truth labels are binary (Positive/Negative) for fair cross-engine comparison.
 EVAL_DATA: list[tuple[str, str]] = [
     # --- Easy positives (high signal) ---
     ("This movie was absolutely fantastic and I loved every minute.", "Positive"),
@@ -99,29 +104,92 @@ def _classification_report(
     return "\n".join(lines)
 
 
-async def main() -> None:
-    engine = TransformerEngine()
+async def evaluate_engine(engine: SentimentEngine, engine_name: str) -> dict:
+    """Run a single engine against the eval set and return metrics."""
     labels = sorted({label for _, label in EVAL_DATA})
 
     y_true: list[str] = []
     y_pred: list[str] = []
+    misses: list[tuple[str, str, str, float]] = []
 
-    easy = sum(1 for _ in EVAL_DATA[:5]) + sum(1 for _ in EVAL_DATA[15:20])
-    hard = len(EVAL_DATA) - easy
-    print(f"Running evaluation on {len(EVAL_DATA)} samples ({easy} easy, {hard} adversarial) with TransformerEngine...")
-    print(f"Model: distilbert-base-uncased-finetuned-sst-2-english\n")
+    start = time.perf_counter()
 
     for text, true_label in EVAL_DATA:
         result = await engine.predict(text)
         y_true.append(true_label)
         y_pred.append(result.label)
-        match = "OK" if result.label == true_label else "MISS"
-        print(f"  [{match}] {true_label:>8s} -> {result.label:>8s}  ({result.score:.4f})  {text[:60]}")
+        if result.label != true_label:
+            misses.append((text[:60], true_label, result.label, result.score))
 
-    print("\n" + "=" * 70)
-    print("Classification Report")
-    print("=" * 70)
-    print(_classification_report(y_true, y_pred, labels))
+    elapsed = time.perf_counter() - start
+    correct = sum(1 for t, p in zip(y_true, y_pred) if t == p)
+    accuracy = correct / len(EVAL_DATA)
+
+    return {
+        "name": engine_name,
+        "y_true": y_true,
+        "y_pred": y_pred,
+        "labels": labels,
+        "misses": misses,
+        "accuracy": accuracy,
+        "correct": correct,
+        "total": len(EVAL_DATA),
+        "elapsed": elapsed,
+    }
+
+
+async def main() -> None:
+    engines: list[tuple[str, SentimentEngine]] = [
+        ("VADER", VaderEngine()),
+        ("DistilBERT", TransformerEngine()),
+        ("RoBERTa", RobertaEngine()),
+        ("Ensemble", EnsembleEngine()),
+    ]
+
+    n_easy = 10
+    n_hard = len(EVAL_DATA) - n_easy
+    print(f"Benchmarking {len(engines)} engines on {len(EVAL_DATA)} samples ({n_easy} easy, {n_hard} adversarial)")
+    print("=" * 80)
+
+    results = []
+    for name, engine in engines:
+        print(f"\nEvaluating {name}...")
+        r = await evaluate_engine(engine, name)
+        results.append(r)
+
+        # Print misses for this engine
+        if r["misses"]:
+            print(f"  Misses ({len(r['misses'])}):")
+            for text, true, pred, score in r["misses"]:
+                print(f"    {true:>8s} -> {pred:>8s}  ({score:.4f})  {text}")
+        else:
+            print("  No misses — perfect score.")
+
+    # Print comparative summary
+    print("\n" + "=" * 80)
+    print("COMPARATIVE RESULTS")
+    print("=" * 80)
+
+    print(f"\n{'Engine':<15s} {'Accuracy':>10s} {'Correct':>10s} {'Misses':>10s} {'Time':>10s}")
+    print("-" * 55)
+    for r in results:
+        misses = r["total"] - r["correct"]
+        print(
+            f"{r['name']:<15s} {r['accuracy']:>9.1%} {r['correct']:>10d} {misses:>10d} {r['elapsed']:>9.2f}s"
+        )
+
+    # Detailed reports
+    for r in results:
+        print(f"\n{'=' * 70}")
+        print(f"{r['name']} — Classification Report")
+        print("=" * 70)
+        print(_classification_report(r["y_true"], r["y_pred"], r["labels"]))
+
+    # Winner
+    best = max(results, key=lambda r: (r["accuracy"], -r["elapsed"]))
+    print(f"\n{'=' * 80}")
+    print(f"BEST ENGINE: {best['name']} ({best['accuracy']:.1%} accuracy, {best['elapsed']:.2f}s)")
+    print("=" * 80)
 
 
 if __name__ == "__main__":

@@ -45,11 +45,13 @@ export default function InteractiveSandbox({
         <div className="flex items-center gap-2">
           <select
             value={engine}
-            onChange={(e) => setEngine(e.target.value as "vader" | "transformer")}
+            onChange={(e) => setEngine(e.target.value as "vader" | "transformer" | "roberta" | "ensemble")}
             className="bg-surface-container-lowest border border-outline-variant/30 rounded px-2 py-1 text-[10px] text-on-surface-variant font-bold uppercase focus:outline-none focus:border-primary"
           >
             <option value="vader">VADER</option>
-            <option value="transformer">TRANSFORMER</option>
+            <option value="transformer">DISTILBERT</option>
+            <option value="roberta">ROBERTA</option>
+            <option value="ensemble">ENSEMBLE</option>
           </select>
           <span className="text-[0.6875rem] font-bold text-on-surface-variant">
             ENGINE
