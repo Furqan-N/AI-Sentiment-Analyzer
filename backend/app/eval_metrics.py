@@ -1,15 +1,17 @@
 """
 Evaluation benchmark for all sentiment engines.
 
-Runs a labeled dataset through each engine and prints a comparative
-classification report (Precision / Recall / F1 / Accuracy).
+Runs engines against both a curated adversarial dataset and the Stanford
+Sentiment Treebank (SST-2) public validation set.
 
 Usage:
     cd backend
-    python -m app.eval_metrics
+    python -m app.eval_metrics              # Full benchmark (adversarial + SST-2)
+    python -m app.eval_metrics --quick      # Adversarial only (no download)
 """
 
 import asyncio
+import sys
 import time
 
 from app.engines.base import SentimentEngine
@@ -18,8 +20,9 @@ from app.engines.transformer_engine import TransformerEngine
 from app.engines.roberta_engine import RobertaEngine
 from app.engines.ensemble_engine import EnsembleEngine
 
-# Labeled evaluation samples — mix of easy, ambiguous, and adversarial cases.
-# Ground truth labels are binary (Positive/Negative) for fair cross-engine comparison.
+# ---------------------------------------------------------------------------
+# Curated adversarial dataset (30 samples)
+# ---------------------------------------------------------------------------
 EVAL_DATA: list[tuple[str, str]] = [
     # --- Easy positives (high signal) ---
     ("This movie was absolutely fantastic and I loved every minute.", "Positive"),
@@ -104,9 +107,13 @@ def _classification_report(
     return "\n".join(lines)
 
 
-async def evaluate_engine(engine: SentimentEngine, engine_name: str) -> dict:
-    """Run a single engine against the eval set and return metrics."""
-    labels = sorted({label for _, label in EVAL_DATA})
+async def evaluate_engine(
+    engine: SentimentEngine,
+    engine_name: str,
+    data: list[tuple[str, str]],
+) -> dict:
+    """Run a single engine against a dataset and return metrics."""
+    labels = sorted({label for _, label in data})
 
     y_true: list[str] = []
     y_pred: list[str] = []
@@ -114,7 +121,7 @@ async def evaluate_engine(engine: SentimentEngine, engine_name: str) -> dict:
 
     start = time.perf_counter()
 
-    for text, true_label in EVAL_DATA:
+    for text, true_label in data:
         result = await engine.predict(text)
         y_true.append(true_label)
         y_pred.append(result.label)
@@ -123,7 +130,7 @@ async def evaluate_engine(engine: SentimentEngine, engine_name: str) -> dict:
 
     elapsed = time.perf_counter() - start
     correct = sum(1 for t, p in zip(y_true, y_pred) if t == p)
-    accuracy = correct / len(EVAL_DATA)
+    accuracy = correct / len(data)
 
     return {
         "name": engine_name,
@@ -133,41 +140,15 @@ async def evaluate_engine(engine: SentimentEngine, engine_name: str) -> dict:
         "misses": misses,
         "accuracy": accuracy,
         "correct": correct,
-        "total": len(EVAL_DATA),
+        "total": len(data),
         "elapsed": elapsed,
     }
 
 
-async def main() -> None:
-    engines: list[tuple[str, SentimentEngine]] = [
-        ("VADER", VaderEngine()),
-        ("DistilBERT", TransformerEngine()),
-        ("RoBERTa", RobertaEngine()),
-        ("Ensemble", EnsembleEngine()),
-    ]
-
-    n_easy = 10
-    n_hard = len(EVAL_DATA) - n_easy
-    print(f"Benchmarking {len(engines)} engines on {len(EVAL_DATA)} samples ({n_easy} easy, {n_hard} adversarial)")
-    print("=" * 80)
-
-    results = []
-    for name, engine in engines:
-        print(f"\nEvaluating {name}...")
-        r = await evaluate_engine(engine, name)
-        results.append(r)
-
-        # Print misses for this engine
-        if r["misses"]:
-            print(f"  Misses ({len(r['misses'])}):")
-            for text, true, pred, score in r["misses"]:
-                print(f"    {true:>8s} -> {pred:>8s}  ({score:.4f})  {text}")
-        else:
-            print("  No misses — perfect score.")
-
-    # Print comparative summary
-    print("\n" + "=" * 80)
-    print("COMPARATIVE RESULTS")
+def _print_results(results: list[dict], dataset_name: str) -> None:
+    """Print comparative table and per-engine reports."""
+    print(f"\n{'=' * 80}")
+    print(f"COMPARATIVE RESULTS — {dataset_name}")
     print("=" * 80)
 
     print(f"\n{'Engine':<15s} {'Accuracy':>10s} {'Correct':>10s} {'Misses':>10s} {'Time':>10s}")
@@ -178,18 +159,108 @@ async def main() -> None:
             f"{r['name']:<15s} {r['accuracy']:>9.1%} {r['correct']:>10d} {misses:>10d} {r['elapsed']:>9.2f}s"
         )
 
-    # Detailed reports
     for r in results:
-        print(f"\n{'=' * 70}")
-        print(f"{r['name']} — Classification Report")
-        print("=" * 70)
+        print(f"\n{'-' * 70}")
+        print(f"{r['name']} — Classification Report ({dataset_name})")
+        print("-" * 70)
         print(_classification_report(r["y_true"], r["y_pred"], r["labels"]))
 
-    # Winner
-    best = max(results, key=lambda r: (r["accuracy"], -r["elapsed"]))
-    print(f"\n{'=' * 80}")
-    print(f"BEST ENGINE: {best['name']} ({best['accuracy']:.1%} accuracy, {best['elapsed']:.2f}s)")
+
+def _load_sst2(max_samples: int = 872) -> list[tuple[str, str]]:
+    """Load the SST-2 validation set from HuggingFace datasets."""
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("  [SKIP] 'datasets' package not installed. Run: pip install datasets")
+        return []
+
+    print(f"  Loading SST-2 validation set from HuggingFace (up to {max_samples} samples)...")
+    ds = load_dataset("stanfordnlp/sst2", split="validation")
+
+    label_map = {0: "Negative", 1: "Positive"}
+    data: list[tuple[str, str]] = []
+    for row in ds:
+        if len(data) >= max_samples:
+            break
+        text = row["sentence"].strip()
+        label = label_map.get(row["label"])
+        if text and label:
+            data.append((text, label))
+
+    print(f"  Loaded {len(data)} samples from SST-2 validation set.\n")
+    return data
+
+
+async def main() -> None:
+    quick_mode = "--quick" in sys.argv
+
+    engines: list[tuple[str, SentimentEngine]] = [
+        ("VADER", VaderEngine()),
+        ("DistilBERT", TransformerEngine()),
+        ("RoBERTa", RobertaEngine()),
+        ("Ensemble", EnsembleEngine()),
+    ]
+
+    # --- Part 1: Curated adversarial dataset ---
+    n_easy = 10
+    n_hard = len(EVAL_DATA) - n_easy
+    print(f"Benchmarking {len(engines)} engines on {len(EVAL_DATA)} curated samples ({n_easy} easy, {n_hard} adversarial)")
     print("=" * 80)
+
+    adversarial_results = []
+    for name, engine in engines:
+        print(f"\nEvaluating {name}...")
+        r = await evaluate_engine(engine, name, EVAL_DATA)
+        adversarial_results.append(r)
+
+        if r["misses"]:
+            print(f"  Misses ({len(r['misses'])}):")
+            for text, true, pred, score in r["misses"]:
+                print(f"    {true:>8s} -> {pred:>8s}  ({score:.4f})  {text}")
+        else:
+            print("  No misses.")
+
+    _print_results(adversarial_results, "Curated Adversarial (30 samples)")
+
+    # --- Part 2: SST-2 public dataset ---
+    if not quick_mode:
+        print(f"\n{'=' * 80}")
+        print("SST-2 PUBLIC DATASET BENCHMARK")
+        print("=" * 80)
+
+        sst2_data = _load_sst2()
+        if sst2_data:
+            sst2_results = []
+            for name, engine in engines:
+                print(f"Evaluating {name} on SST-2 ({len(sst2_data)} samples)...")
+                r = await evaluate_engine(engine, name, sst2_data)
+                sst2_results.append(r)
+                print(f"  {name}: {r['accuracy']:.1%} accuracy ({r['correct']}/{r['total']}) in {r['elapsed']:.2f}s")
+
+            _print_results(sst2_results, f"SST-2 Validation ({len(sst2_data)} samples)")
+
+            # Overall winner across both datasets
+            print(f"\n{'=' * 80}")
+            print("OVERALL SUMMARY")
+            print("=" * 80)
+            print(f"\n{'Engine':<15s} {'Adversarial':>12s} {'SST-2':>12s} {'Average':>12s}")
+            print("-" * 55)
+            best_avg = 0.0
+            best_name = ""
+            for adv, sst in zip(adversarial_results, sst2_results):
+                avg = (adv["accuracy"] + sst["accuracy"]) / 2
+                print(f"{adv['name']:<15s} {adv['accuracy']:>11.1%} {sst['accuracy']:>11.1%} {avg:>11.1%}")
+                if avg > best_avg:
+                    best_avg = avg
+                    best_name = adv["name"]
+
+            print(f"\nBest overall: {best_name} ({best_avg:.1%} average accuracy)")
+    else:
+        best = max(adversarial_results, key=lambda r: (r["accuracy"], -r["elapsed"]))
+        print(f"\n{'=' * 80}")
+        print(f"BEST ENGINE: {best['name']} ({best['accuracy']:.1%} accuracy, {best['elapsed']:.2f}s)")
+        print("=" * 80)
+        print("\nRun without --quick to include SST-2 public dataset benchmark.")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import logging
@@ -12,9 +13,24 @@ from app.models import BatchJob, SentimentResultRecord
 
 logger = logging.getLogger(__name__)
 
+# Max concurrent predictions per chunk to avoid overwhelming the model
+MAX_CONCURRENCY = 10
+
+
+async def _predict_one(semaphore: asyncio.Semaphore, engine, text: str) -> SentimentResultRecord:
+    """Run a single prediction with concurrency control."""
+    async with semaphore:
+        result = await engine.predict(text)
+        return SentimentResultRecord(
+            text=text,
+            label=result.label,
+            score=result.score,
+            engine_used=result.engine_used,
+        )
+
 
 async def process_batch(file_bytes: bytes, engine_type: str, job_id: str) -> None:
-    """Background task: read CSV, analyze in chunks, bulk-insert results, track progress."""
+    """Background task: read CSV, analyze in chunks with concurrent predictions, bulk-insert results."""
     logger.info("Batch job %s started (engine=%s)", job_id, engine_type)
 
     decoded = file_bytes.decode("utf-8")
@@ -29,7 +45,6 @@ async def process_batch(file_bytes: bytes, engine_type: str, job_id: str) -> Non
     total = len(rows)
 
     async with async_session() as session:
-        # Update job with total row count and set to processing
         await session.execute(
             update(BatchJob)
             .where(BatchJob.job_id == job_id)
@@ -49,23 +64,17 @@ async def process_batch(file_bytes: bytes, engine_type: str, job_id: str) -> Non
 
         engine = get_engine(engine_type)
         chunk_size = settings.batch_chunk_size
+        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         processed = 0
 
         try:
             for i in range(0, total, chunk_size):
                 chunk = rows[i : i + chunk_size]
-                records: list[SentimentResultRecord] = []
 
-                for text in chunk:
-                    result = await engine.predict(text)
-                    records.append(
-                        SentimentResultRecord(
-                            text=text,
-                            label=result.label,
-                            score=result.score,
-                            engine_used=result.engine_used,
-                        )
-                    )
+                # Run all predictions in the chunk concurrently
+                records = await asyncio.gather(
+                    *[_predict_one(semaphore, engine, text) for text in chunk]
+                )
 
                 session.add_all(records)
                 processed += len(chunk)
@@ -79,7 +88,6 @@ async def process_batch(file_bytes: bytes, engine_type: str, job_id: str) -> Non
 
                 logger.info("Batch job %s: %d / %d rows processed", job_id, processed, total)
 
-            # Mark completed
             await session.execute(
                 update(BatchJob)
                 .where(BatchJob.job_id == job_id)

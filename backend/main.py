@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,7 @@ from app.core.database import engine
 from app.models import Base
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
@@ -36,6 +38,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def latency_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+    response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
+    logger.info("%s %s completed in %sms", request.method, request.url.path, elapsed_ms)
+    return response
 
 
 @app.exception_handler(OperationalError)
