@@ -29,3 +29,15 @@ class BatchResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+class BatchJobStatus(BaseModel):
+    job_id: str
+    status: str
+    total_rows: int
+    processed_rows: int
+    engine_type: str
+    error_message: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
