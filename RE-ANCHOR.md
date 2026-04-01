@@ -36,7 +36,15 @@ Added `BatchJob` database model to track batch processing jobs with status lifec
 
 ### Phase 6: Containerization & Evaluation (Done)
 
-Dockerized the full stack: backend `Dockerfile` (Python 3.12, CPU-only torch), frontend `Dockerfile` (multi-stage Node 22 Alpine with standalone output), and `docker-compose.yml` orchestrating backend + frontend + PostgreSQL 15 with health checks and a persistent volume. Made the frontend API base URL configurable via `NEXT_PUBLIC_API_URL` env var. Added `eval_metrics.py` evaluation script that runs 20 labeled samples through the TransformerEngine and prints a Precision/Recall/F1 classification report. Enabled Next.js `output: "standalone"` for production Docker builds.
+Dockerized the full stack: backend `Dockerfile` (Python 3.12, CPU-only torch), frontend `Dockerfile` (multi-stage Node 22 Alpine with standalone output), and `docker-compose.yml` orchestrating backend + frontend + PostgreSQL 15 with health checks and a persistent volume. Made the frontend API base URL configurable via `NEXT_PUBLIC_API_URL` env var. Enabled Next.js `output: "standalone"` for production Docker builds.
+
+### Phase 7: Advanced Engines & Dashboard Wiring (Done)
+
+Added two new sentiment engines: **RoBERTa** (`cardiffnlp/twitter-roberta-base-sentiment-latest`, 124M tweets, native 3-class) and **Ensemble** (weighted VADER 30% + RoBERTa 70%). Global `EngineContext` shares the selected engine across TopBar tabs, InteractiveSandbox, LiveFeed, and Sidebar batch uploads. All dashboard buttons wired up: TopBar sensors → /live-feed, settings → /settings; Sidebar links → API Swagger docs and GitHub repo; Settings page has per-engine test buttons and refresh health check with latency. LiveSignalFeed now shows actual analyzed text. API response includes `text` field.
+
+### Phase 8: Production Readiness & Scale (Done)
+
+**CLI** (`cli.py`): Typer-based CLI with `analyze`, `batch`, `engines`, and `benchmark` commands for end-to-end integration without the API server. **PostgreSQL indexes**: single-column indexes on `label`, `engine_used`, `created_at` plus composite indexes `(created_at, label)` and `(engine_used, label)` for sub-millisecond analytics queries. **Connection pooling**: `pool_size=20`, `max_overflow=10`, `pool_pre_ping=True`, `pool_recycle=1800`. **Latency middleware**: every API response includes `X-Response-Time` header with millisecond measurement. **Streaming batch pipeline**: CSV written to temp file on disk and streamed row-by-row with concurrent predictions via `asyncio.gather` + semaphore — supports GB-scale files without loading into memory. Chunk size increased to 500. **SST-2 benchmark**: eval script downloads Stanford Sentiment Treebank validation set (872 samples) from HuggingFace and benchmarks all 4 engines. **Large dataset generator** (`generate_large_dataset.py`): downloads IMDB reviews and generates CSVs up to GB-scale (500k+ rows) for throughput testing.
 
 ---
 
@@ -48,32 +56,37 @@ docker-compose.yml                   # Full stack: backend + frontend + PostgreS
 backend/
 ├── Dockerfile                       # Python 3.12, CPU-only torch, uvicorn
 ├── .dockerignore
-├── main.py                          # FastAPI app + lifespan + CORS + global error handlers
-├── requirements.txt                 # All Python dependencies
+├── main.py                          # FastAPI app + lifespan + CORS + error handlers + latency middleware
+├── cli.py                           # Typer CLI: analyze, batch, engines, benchmark commands
+├── requirements.txt                 # All Python dependencies (incl. typer, datasets)
 ├── seed_data.py                     # Inserts ~50 fake records for testing analytics
+├── generate_large_dataset.py        # Downloads IMDB reviews, generates GB-scale test CSVs
+├── test_reviews.csv                 # 20-row sample CSV for quick testing
 └── app/
     ├── __init__.py
-    ├── models.py                    # SQLAlchemy SentimentResultRecord + BatchJob tables
+    ├── models.py                    # SQLAlchemy tables + indexes (SentimentResultRecord, BatchJob)
+    ├── eval_metrics.py              # Multi-engine benchmark: adversarial + SST-2 public dataset
     ├── api/
     │   ├── __init__.py
     │   ├── routes.py                # POST /analyze, POST /analyze/batch, GET /analyze/batch/{job_id}
     │   └── analytics.py             # GET /analytics/summary, GET /analytics/trends
     ├── core/
     │   ├── __init__.py
-    │   ├── config.py                # pydantic-settings: DB URL, batch chunk size
-    │   ├── database.py              # Async SQLAlchemy engine + session factory
+    │   ├── config.py                # pydantic-settings: DB URL, pool sizes, batch chunk size
+    │   ├── database.py              # Async SQLAlchemy engine + connection pooling + session factory
     │   ├── schemas.py               # Pydantic request/response models (incl. BatchJobStatus)
-    │   ├── engine_factory.py        # Maps engine_type string → engine singleton
-    │   └── batch.py                 # Background CSV processing logic
-    ├── eval_metrics.py               # TransformerEngine evaluation: 20 samples → P/R/F1 report
+    │   ├── engine_factory.py        # Maps engine_type string → engine singleton (4 engines)
+    │   └── batch.py                 # Streaming CSV batch processor with concurrent predictions
     ├── services/
     │   ├── __init__.py
     │   └── analytics.py             # Query functions: summary counts, avg confidence, hourly trends
     └── engines/
-        ├── __init__.py              # Re-exports VaderEngine, TransformerEngine
+        ├── __init__.py              # Re-exports all 4 engine classes
         ├── base.py                  # ABC SentimentEngine + SentimentResult dataclass
-        ├── vader_engine.py          # VADER rule-based engine
-        └── transformer_engine.py    # HuggingFace DistilBERT engine
+        ├── vader_engine.py          # VADER rule-based engine (3-class)
+        ├── transformer_engine.py    # HuggingFace DistilBERT engine (2-class)
+        ├── roberta_engine.py        # Twitter-RoBERTa engine (3-class, 124M tweets)
+        └── ensemble_engine.py       # Weighted VADER + RoBERTa fusion (3-class)
 
 frontend/                            # Next.js 16 + TypeScript + Tailwind CSS v4
 ├── Dockerfile                       # Multi-stage Node 22 Alpine, standalone output
@@ -81,20 +94,22 @@ frontend/                            # Next.js 16 + TypeScript + Tailwind CSS v4
 ├── src/
 │   ├── app/
 │   │   ├── globals.css              # Tailwind v4 @theme: MD3 dark palette (50+ tokens)
-│   │   ├── layout.tsx               # Root layout: Sidebar + TopBar shell, Inter + Material Symbols fonts
+│   │   ├── layout.tsx               # Root layout: Providers + Sidebar + TopBar shell
 │   │   ├── page.tsx                 # Overview dashboard (stat cards, sandbox, chart, feed)
 │   │   ├── live-feed/page.tsx       # Dedicated live feed with inline analysis + filters
 │   │   ├── analytics/page.tsx       # Historical analytics: chart + label breakdown bars
-│   │   └── settings/page.tsx        # Engine info cards + system status panel
+│   │   └── settings/page.tsx        # 4 engine cards with test buttons + system status
 │   ├── components/
-│   │   ├── Sidebar.tsx              # Fixed sidebar nav with active state + CSV upload button
-│   │   ├── TopBar.tsx               # Top header: engine tabs, live pulse indicator, avatar
+│   │   ├── Providers.tsx            # Client-side context wrapper (EngineProvider)
+│   │   ├── Sidebar.tsx              # Fixed sidebar nav + CSV upload + batch progress toast
+│   │   ├── TopBar.tsx               # 4 engine tabs, nav buttons, live pulse indicator
 │   │   ├── StatCards.tsx            # 4 intelligence cards with sparklines (Total/Pos/Neg/Neu)
 │   │   ├── InteractiveSandbox.tsx   # Textarea + engine selector → POST /analyze with result panel
 │   │   ├── SentimentChart.tsx       # Recharts AreaChart: 7-day hourly trends with gradient fills
-│   │   └── LiveSignalFeed.tsx       # Scrollable signal feed with label badges + timestamps
+│   │   └── LiveSignalFeed.tsx       # Scrollable signal feed with actual text + label badges
 │   └── lib/
-│       └── api.ts                   # Typed fetch wrappers for all backend endpoints
+│       ├── api.ts                   # Typed fetch wrappers for all backend endpoints
+│       └── EngineContext.tsx         # Global engine selection context (4 engines)
 ├── package.json                     # next, react, recharts, tailwindcss, typescript
 └── tsconfig.json
 ```
@@ -114,6 +129,8 @@ torch>=2.0.0
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
 python-multipart>=0.0.9
+typer>=0.12.0
+datasets>=2.19.0
 ```
 
 ## 4b. Frontend Dependencies (`frontend/package.json`)
@@ -135,20 +152,22 @@ typescript@5
 - **`SentimentEngine`** (`app/engines/base.py`): Abstract base class — `async predict(text: str) -> SentimentResult`.
 - **`SentimentResult`**: Dataclass with fields `label`, `score`, `engine_used`.
 - **`VaderEngine`** (`app/engines/vader_engine.py`): Uses `vaderSentiment`. Compound score thresholds: ≥0.05 → Positive, ≤-0.05 → Negative, else Neutral. Score = `abs(compound)`.
-- **`TransformerEngine`** (`app/engines/transformer_engine.py`): HuggingFace `pipeline("sentiment-analysis")` with `distilbert-base-uncased-finetuned-sst-2-english`. Score = model confidence.
-- **Engine Factory** (`app/core/engine_factory.py`): Dict maps `"vader"` / `"transformer"` to singleton instances. `get_engine()` returns engine or raises `ValueError`.
+- **`TransformerEngine`** (`app/engines/transformer_engine.py`): HuggingFace `pipeline("sentiment-analysis")` with `distilbert-base-uncased-finetuned-sst-2-english`. Binary (Positive/Negative). Score = model confidence.
+- **`RobertaEngine`** (`app/engines/roberta_engine.py`): `cardiffnlp/twitter-roberta-base-sentiment-latest`, trained on ~124M tweets. Native 3-class (Positive/Negative/Neutral). Better at sarcasm and informal text.
+- **`EnsembleEngine`** (`app/engines/ensemble_engine.py`): Weighted fusion of VADER (30%) and RoBERTa (70%). Boosts confidence when both agree, reduces on disagreement.
+- **Engine Factory** (`app/core/engine_factory.py`): Dict maps `"vader"` / `"transformer"` / `"roberta"` / `"ensemble"` to singleton instances. `get_engine()` returns engine or raises `ValueError`.
 
 ### Database Layer (Phase 2)
 
-- **Config** (`app/core/config.py`): `pydantic-settings` `Settings` class. DB URL and `batch_chunk_size` (default 50) overridable via `SENTIMENT_` prefixed env vars.
-- **Database** (`app/core/database.py`): Async SQLAlchemy engine + `async_sessionmaker`. `get_db()` is a FastAPI dependency yielding an `AsyncSession`.
+- **Config** (`app/core/config.py`): `pydantic-settings` `Settings` class. DB URL, `batch_chunk_size` (default 500), `db_pool_size` (default 20), `db_max_overflow` (default 10) overridable via `SENTIMENT_` prefixed env vars.
+- **Database** (`app/core/database.py`): Async SQLAlchemy engine with connection pooling (`pool_size=20`, `max_overflow=10`, `pool_pre_ping=True`, `pool_recycle=1800`) + `async_sessionmaker`. `get_db()` is a FastAPI dependency yielding an `AsyncSession`.
 - **Model** (`app/models.py`): `SentimentResultRecord` table with columns: `id` (PK, autoincrement), `text`, `label`, `score`, `engine_used`, `created_at` (server-side `now()`). `BatchJob` table with columns: `job_id` (string PK), `status` (pending/processing/completed/failed), `total_rows`, `processed_rows`, `engine_type`, `error_message` (nullable), `created_at`.
 - **Lifespan** (`main.py`): On startup, `Base.metadata.create_all` auto-creates tables. On shutdown, disposes the engine.
 
 ### Batch Processing (Phase 2)
 
 - **`POST /analyze/batch`** (`app/api/routes.py`): Accepts a CSV file upload + `engine_type` query param. Validates content type, reads bytes, generates a job ID (12-char hex), and enqueues `process_batch` via `BackgroundTasks`.
-- **`process_batch()`** (`app/core/batch.py`): Decodes CSV, extracts `text` column, chunks rows by `batch_chunk_size` (default 50), runs the engine on each row, bulk-inserts per chunk with a commit after each chunk. Updates `BatchJob.processed_rows` after every chunk. Sets status to `completed` on success or `failed` with `error_message` on exception.
+- **`process_batch()`** (`app/core/batch.py`): Writes uploaded bytes to a temp file on disk, then streams rows using `_stream_rows()` generator — never loads the entire CSV into memory. Chunks rows by `batch_chunk_size` (default 500). Within each chunk, runs concurrent predictions via `asyncio.gather()` with a semaphore (max 10 concurrent). Bulk-inserts per chunk and updates `BatchJob.processed_rows` after every chunk. Sets status to `completed` on success or `failed` with `error_message` on exception. Supports GB-scale CSV files.
 
 ### Analytics Layer (Phase 3)
 
@@ -170,10 +189,32 @@ typescript@5
 - Catch-all `Exception` → 500 (unexpected error with logging).
 - All handlers log the error and return a structured JSON `{"detail": "..."}` response.
 
-### Evaluation Script (Phase 6)
+### CLI (Phase 8)
 
-- **`app/eval_metrics.py`**: 20 labeled samples (10 Positive, 10 Negative) run through `TransformerEngine`. Prints per-sample match/miss, then a full classification report (precision, recall, F1, accuracy, macro averages). Zero external dependencies beyond the engines — no sklearn required.
-- Run with: `cd backend && python -m app.eval_metrics`
+- **`cli.py`**: Typer-based CLI with 4 commands:
+  - `analyze "text" --engine ensemble` — single text analysis with latency.
+  - `batch file.csv --engine vader --chunk-size 500` — streaming batch with throughput metrics (samples/sec, file size).
+  - `engines` — list all available engines.
+  - `benchmark` — run the full evaluation benchmark.
+
+### Database Indexes (Phase 8)
+
+- Single-column indexes: `label`, `engine_used`, `created_at` on `SentimentResultRecord`.
+- Composite indexes: `(created_at, label)` for trend queries, `(engine_used, label)` for filtered analytics.
+- `BatchJob.status` indexed for status lookups.
+
+### Latency Middleware (Phase 8)
+
+- HTTP middleware in `main.py` measures request duration and sets `X-Response-Time` header (e.g., `12.34ms`) on every response. Logs method, path, and elapsed time to stdout.
+
+### Evaluation & Benchmarking (Phases 6–8)
+
+- **`app/eval_metrics.py`**: Benchmarks all 4 engines against two datasets:
+  1. **Curated adversarial** (30 samples: 10 easy + 20 hard with sarcasm, negation, backhanded phrasing).
+  2. **SST-2 public dataset** (872 validation samples from `stanfordnlp/sst2` via HuggingFace `datasets`).
+- Prints per-engine classification reports (P/R/F1), comparative accuracy table, timing, and best engine.
+- `--quick` flag skips SST-2 download for fast local runs.
+- **`generate_large_dataset.py`**: Downloads IMDB reviews (25k) and generates CSVs up to GB-scale (`--rows 500000` → ~1.2 GB) for throughput testing.
 
 ### Containerization (Phase 6)
 
@@ -207,14 +248,16 @@ typescript@5
 
 ### Async / Performance
 
-- Both engines use `asyncio.to_thread()` for non-blocking ML inference.
+- All engines use `asyncio.to_thread()` for non-blocking ML inference.
 - `@lru_cache(maxsize=1)` lazily loads each model on first call.
-- Batch processing commits per chunk to avoid holding a single massive transaction.
+- Batch processing streams from disk, commits per chunk, uses `asyncio.gather` with semaphore for concurrent predictions.
+- Connection pooling: 20 persistent connections + 10 overflow, pre-ping health checks, 30-min recycle.
+- Latency middleware tracks every request with `X-Response-Time` header.
 
 ### Validation
 
 - `text`: non-empty (`min_length=1`).
-- `engine_type`: regex `^(vader|transformer)$`, defaults to `"vader"`.
+- `engine_type`: regex `^(vader|transformer|roberta|ensemble)$`, defaults to `"vader"`.
 - Batch CSV upload: content type must be `text/csv` or `application/vnd.ms-excel`.
 
 ### Response Schemas
@@ -318,12 +361,32 @@ python seed_data.py
 # Inserts ~50 fake records with timestamps spanning the last 7 days
 ```
 
+### CLI Usage
+
+```bash
+cd backend
+python cli.py analyze "This product is amazing!" --engine ensemble
+python cli.py batch test_reviews.csv --engine vader
+python cli.py engines
+python cli.py benchmark
+```
+
 ### Run Evaluation
 
 ```bash
-cd "backend"
-python -m app.eval_metrics
-# Runs 20 labeled samples through TransformerEngine, prints classification report
+cd backend
+python -m app.eval_metrics              # Full benchmark (adversarial + SST-2)
+python -m app.eval_metrics --quick      # Adversarial only (no download)
+```
+
+### Generate Large Test Data
+
+```bash
+cd backend
+python generate_large_dataset.py                    # 25k IMDB reviews (~60 MB)
+python generate_large_dataset.py --rows 100000      # 100k rows (~240 MB)
+python generate_large_dataset.py --rows 500000      # 500k rows (~1.2 GB)
+python cli.py batch large_test_data.csv --engine vader
 ```
 
 ### Test Requests
@@ -370,7 +433,12 @@ curl http://localhost:8000/analytics/trends
 - [x] **Global error handling** — FastAPI exception handlers for DB errors (503), timeouts (504), and unhandled exceptions (500).
 - [x] **Git** — Repository initialized, initial commit on `master`.
 - [x] **Batch job status tracking** — `BatchJob` model + `GET /analyze/batch/{job_id}` endpoint + sidebar progress toast.
-- [x] **Evaluation script** — `eval_metrics.py` with 20 labeled samples and classification report.
+- [x] **Evaluation script** — `eval_metrics.py` benchmarks 4 engines against adversarial + SST-2 datasets.
+- [x] **CLI** — Typer CLI with analyze, batch (streaming), engines, and benchmark commands.
+- [x] **Database indexes** — Single + composite indexes for sub-millisecond analytics queries.
+- [x] **Connection pooling** — pool_size=20, max_overflow=10, pre_ping, recycle.
+- [x] **Latency tracking** — X-Response-Time header on every API response.
+- [x] **GB-scale batch support** — Streaming CSV parser + IMDB dataset generator.
 - [ ] **Dependency installation** — `pip install -r requirements.txt` has not been run yet (use Docker instead).
 
 ---
