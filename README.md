@@ -1,25 +1,27 @@
 # AI Sentiment Analyzer
 
-A production-grade sentiment analysis platform with pluggable ML engines, real-time analytics, and a React dashboard. Built with FastAPI, Next.js 16, and PostgreSQL.
+A production-grade sentiment analysis platform with 4 pluggable ML engines, a streaming batch pipeline for GB-scale CSV processing, real-time analytics, and a React dashboard. Exposes functionality through both a FastAPI REST API and a Typer CLI.
 
 ## Features
 
-- **Dual ML Engines** — VADER (rule-based, fast) and DistilBERT Transformer (deep learning, accurate), swappable per request via the Strategy Pattern
-- **Real-Time Analysis** — Analyze text instantly through the interactive sandbox or API
-- **Batch Processing** — Upload CSV files for background processing with live progress tracking
+- **4 ML Engines** — VADER (rule-based), DistilBERT (SST-2), RoBERTa (124M tweets, 3-class), and Ensemble (weighted VADER + RoBERTa fusion), swappable per request via the Strategy Pattern
+- **CLI + REST API** — Analyze text, batch-process CSVs, list engines, and run benchmarks from the command line or via HTTP
+- **Streaming Batch Pipeline** — Processes GB-scale CSV files without loading into memory; concurrent predictions via `asyncio.gather` with semaphore control
+- **Real-Time Analysis** — Analyze text instantly through the interactive sandbox, live feed, or API
 - **Analytics Dashboard** — 7-day trend charts, sentiment breakdowns, and summary statistics
-- **Persistent Storage** — Every analysis result is stored in PostgreSQL with timestamps
-- **Global Error Handling** — Structured JSON responses for DB errors, timeouts, and unhandled exceptions
-- **Model Evaluation** — Built-in script to measure Precision, Recall, and F1 against labeled data
+- **PostgreSQL with Indexing** — Single + composite indexes for sub-millisecond analytics queries; connection pooling (20 connections + 10 overflow)
+- **Latency Tracking** — Every API response includes an `X-Response-Time` header with millisecond measurement
+- **Model Benchmarking** — Evaluates all 4 engines against a curated adversarial dataset (30 samples) and the Stanford SST-2 public validation set (872 samples)
+- **GB-Scale Test Data** — Built-in generator downloads IMDB reviews and creates CSVs up to 1.2 GB (500k+ rows) for throughput testing
 - **Dockerized** — Full stack runs with a single `docker compose up`
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| Backend | FastAPI, SQLAlchemy 2.0 (async), Pydantic v2 |
-| ML Engines | VADER (vaderSentiment), DistilBERT (HuggingFace Transformers) |
-| Database | PostgreSQL 15 + asyncpg |
+| Backend | FastAPI, SQLAlchemy 2.0 (async), Pydantic v2, Typer CLI |
+| ML Engines | VADER, DistilBERT, RoBERTa (twitter-roberta-base-sentiment-latest), Ensemble |
+| Database | PostgreSQL 15 + asyncpg + connection pooling + indexed queries |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Recharts |
 | Infrastructure | Docker, Docker Compose |
 
@@ -75,6 +77,30 @@ python seed_data.py
 
 This inserts ~50 sample records spanning 7 days to populate the analytics charts.
 
+## CLI
+
+The Typer-based CLI provides full access to sentiment analysis without the API server:
+
+```bash
+# Analyze a single text
+python cli.py analyze "This product is amazing!" --engine ensemble
+
+# Batch process a CSV (streaming, with throughput metrics)
+python cli.py batch reviews.csv --engine vader --chunk-size 500
+
+# List available engines
+python cli.py engines
+
+# Run the full evaluation benchmark
+python cli.py benchmark
+```
+
+With Docker:
+```bash
+docker compose exec backend python cli.py analyze "Great product!" --engine roberta
+docker compose exec backend python cli.py batch test_reviews.csv --engine ensemble
+```
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -86,19 +112,22 @@ This inserts ~50 sample records spanning 7 days to populate the analytics charts
 | `GET` | `/analytics/summary` | Total count, per-label breakdown, average confidence. |
 | `GET` | `/analytics/trends` | Hourly sentiment counts for the last 7 days. |
 
+All responses include an `X-Response-Time` header with latency in milliseconds.
+
 ### Example
 
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"text": "This product is amazing!", "engine_type": "vader"}'
+  -d '{"text": "This product is amazing!", "engine_type": "ensemble"}'
 ```
 
 ```json
 {
   "label": "Positive",
   "score": 0.6239,
-  "engine_used": "vader",
+  "engine_used": "ensemble",
+  "text": "This product is amazing!",
   "id": 1,
   "created_at": "2026-03-31T10:30:00Z"
 }
@@ -118,6 +147,15 @@ text
 "Terrible experience, would not recommend."
 ```
 
+## Engines
+
+| Engine | Model | Classes | Best For |
+|--------|-------|---------|----------|
+| `vader` | Rule-based lexicon | 3 | Fast inference, explicit sentiment |
+| `transformer` | DistilBERT (SST-2) | 2 | Lightweight transformer accuracy |
+| `roberta` | RoBERTa (124M tweets) | 3 | Sarcasm, informal text, nuance |
+| `ensemble` | VADER 30% + RoBERTa 70% | 3 | Highest accuracy (default) |
+
 ## Dashboard
 
 The frontend is a "Mission Control" dashboard with a Material Design 3 dark theme.
@@ -127,9 +165,9 @@ The frontend is a "Mission Control" dashboard with a Material Design 3 dark them
 | **Overview** | Stat cards, interactive analysis sandbox, trend chart, live signal feed |
 | **Live Feed** | Real-time analysis with sentiment label filters and inline results |
 | **Historical Analytics** | Full-width trend chart with label breakdown bars and confidence metrics |
-| **Model Settings** | Engine info cards and system status panel |
+| **Model Settings** | 4 engine cards with test buttons, health check with latency, Swagger link |
 
-Batch CSV uploads show a live progress indicator in the sidebar with row-level tracking.
+The global engine selector in the TopBar syncs across all pages. Batch CSV uploads show a live progress indicator in the sidebar.
 
 ## Architecture
 
@@ -139,39 +177,50 @@ Batch CSV uploads show a live progress indicator in the sidebar with row-level t
                     │  Next.js 16 │
                     └──────┬──────┘
                            │ fetch
-                    ┌──────▼──────┐
-                    │   Backend   │
-                    │   FastAPI   │
-                    └──┬──────┬───┘
-               ┌───────▼┐  ┌─▼────────┐
-               │  VADER  │  │DistilBERT│
-               │ Engine  │  │  Engine  │
-               └─────────┘  └──────────┘
-                    │
-              ┌─────▼─────┐
-              │ PostgreSQL │
-              │     15     │
-              └───────────┘
+                    ┌──────▼──────┐     ┌─────────┐
+                    │   Backend   │────►│   CLI   │
+                    │   FastAPI   │     │  Typer  │
+                    └──┬──┬───┬───┘     └─────────┘
+               ┌───────▼┐ │ ┌─▼────────┐
+               │  VADER  │ │ │ RoBERTa  │
+               └─────────┘ │ └──────────┘
+              ┌────────────▼─┐ ┌──────────┐
+              │  DistilBERT  │ │ Ensemble │
+              └──────────────┘ └──────────┘
+                       │
+                 ┌─────▼─────┐
+                 │ PostgreSQL │
+                 │  15 + idx  │
+                 └───────────┘
 ```
 
-- **Strategy Pattern** — Engines implement an abstract `SentimentEngine` base class. The factory maps `"vader"` / `"transformer"` to singleton instances.
-- **Async Throughout** — All inference runs via `asyncio.to_thread()`. Database operations use SQLAlchemy async sessions.
-- **Batch Resilience** — CSV processing runs in background tasks, commits per chunk, and tracks progress in a `BatchJob` table. Failures are captured with error messages.
+- **Strategy Pattern** — 4 engines implement an abstract `SentimentEngine` base class. The factory maps engine names to singleton instances.
+- **Async Throughout** — All inference runs via `asyncio.to_thread()`. Database operations use SQLAlchemy async sessions with connection pooling.
+- **Streaming Batch** — CSV written to temp file, streamed row-by-row, concurrent predictions per chunk via `asyncio.gather`. Supports GB-scale files.
+- **Indexed Queries** — Composite indexes on `(created_at, label)` and `(engine_used, label)` for sub-millisecond analytics at scale.
 
 ## Model Evaluation
 
-Run the built-in evaluation script to measure TransformerEngine accuracy:
+Benchmark all 4 engines against curated adversarial data and the Stanford SST-2 public dataset:
 
 ```bash
-# With Docker
+# Full benchmark (adversarial + SST-2 public dataset)
 docker compose exec backend python -m app.eval_metrics
 
-# Without Docker
-cd backend
-python -m app.eval_metrics
+# Quick mode (adversarial only, no download)
+docker compose exec backend python -m app.eval_metrics --quick
 ```
 
-This runs 30 labeled samples (10 easy, 20 adversarial) through DistilBERT and prints a classification report with Precision, Recall, F1, and accuracy. The adversarial set includes sarcasm, double negation, and mixed-signal text to stress-test the model.
+### Large-Scale Throughput Testing
+
+```bash
+# Generate test data from IMDB reviews
+docker compose exec backend python generate_large_dataset.py --rows 100000   # ~240 MB
+docker compose exec backend python generate_large_dataset.py --rows 500000   # ~1.2 GB
+
+# Process through the streaming pipeline
+docker compose exec backend python cli.py batch large_test_data.csv --engine vader
+```
 
 ## Project Structure
 
@@ -180,34 +229,40 @@ docker-compose.yml
 
 backend/
 ├── Dockerfile
-├── main.py                     # App entry point + global error handlers
+├── cli.py                      # Typer CLI: analyze, batch, engines, benchmark
+├── main.py                     # FastAPI app + latency middleware + error handlers
 ├── requirements.txt
 ├── seed_data.py
+├── generate_large_dataset.py   # IMDB-based GB-scale CSV generator
 └── app/
-    ├── models.py               # SentimentResultRecord + BatchJob tables
-    ├── eval_metrics.py         # TransformerEngine evaluation script
+    ├── models.py               # SQLAlchemy tables + indexes
+    ├── eval_metrics.py         # Multi-engine benchmark (adversarial + SST-2)
     ├── api/
     │   ├── routes.py           # /analyze, /analyze/batch, /analyze/batch/{job_id}
     │   └── analytics.py        # /analytics/summary, /analytics/trends
     ├── core/
-    │   ├── config.py           # Environment-based settings (SENTIMENT_ prefix)
-    │   ├── database.py         # Async SQLAlchemy engine + sessions
+    │   ├── config.py           # Settings (DB, pool sizes, chunk size)
+    │   ├── database.py         # Async engine + connection pooling
     │   ├── schemas.py          # Pydantic request/response models
-    │   ├── engine_factory.py   # Engine registry
-    │   └── batch.py            # Background CSV processing with progress tracking
+    │   ├── engine_factory.py   # 4-engine registry
+    │   └── batch.py            # Streaming CSV processor with concurrent predictions
     ├── services/
     │   └── analytics.py        # Summary + trend query functions
     └── engines/
-        ├── base.py             # SentimentEngine ABC + SentimentResult dataclass
-        ├── vader_engine.py     # VADER rule-based engine
-        └── transformer_engine.py  # HuggingFace DistilBERT engine
+        ├── base.py             # SentimentEngine ABC
+        ├── vader_engine.py     # VADER (rule-based, 3-class)
+        ├── transformer_engine.py  # DistilBERT (SST-2, 2-class)
+        ├── roberta_engine.py   # RoBERTa (124M tweets, 3-class)
+        └── ensemble_engine.py  # Weighted VADER + RoBERTa fusion
 
 frontend/
 ├── Dockerfile
 └── src/
     ├── app/                    # Next.js App Router pages
-    ├── components/             # Sidebar, TopBar, StatCards, Charts, etc.
-    └── lib/api.ts              # Typed API client
+    ├── components/             # Sidebar, TopBar, StatCards, Charts, Providers
+    └── lib/
+        ├── api.ts              # Typed API client
+        └── EngineContext.tsx    # Global engine selection context
 ```
 
 ## Configuration
@@ -217,7 +272,9 @@ Environment variables (all prefixed with `SENTIMENT_`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SENTIMENT_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/sentiment_db` | PostgreSQL connection string |
-| `SENTIMENT_BATCH_CHUNK_SIZE` | `50` | Rows per chunk in batch processing |
+| `SENTIMENT_BATCH_CHUNK_SIZE` | `500` | Rows per chunk in batch processing |
+| `SENTIMENT_DB_POOL_SIZE` | `20` | Connection pool size |
+| `SENTIMENT_DB_MAX_OVERFLOW` | `10` | Max overflow connections |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL for the frontend |
 
 ## License
