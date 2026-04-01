@@ -52,7 +52,16 @@ async def analyze_batch(
     if file.content_type not in ("text/csv", "application/vnd.ms-excel"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted.")
 
-    file_bytes = await file.read()
+    # Read in 8MB chunks to handle large files without spiking memory
+    chunks: list[bytes] = []
+    while True:
+        chunk = await file.read(8 * 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    file_bytes = b"".join(chunks)
+
+    file_mb = len(file_bytes) / (1024 * 1024)
     job_id = uuid.uuid4().hex[:12]
 
     # Create the batch job record before enqueuing

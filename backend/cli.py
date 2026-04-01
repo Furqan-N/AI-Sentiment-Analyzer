@@ -11,7 +11,6 @@ Usage:
 
 import asyncio
 import csv
-import io
 import sys
 import time
 from pathlib import Path
@@ -46,6 +45,16 @@ def _get_engine(name: str) -> SentimentEngine:
     return engine
 
 
+def _format_size(nbytes: int) -> str:
+    if nbytes >= 1024 ** 3:
+        return f"{nbytes / (1024 ** 3):.2f} GB"
+    if nbytes >= 1024 ** 2:
+        return f"{nbytes / (1024 ** 2):.1f} MB"
+    if nbytes >= 1024:
+        return f"{nbytes / 1024:.1f} KB"
+    return f"{nbytes} B"
+
+
 @app.command()
 def analyze(
     text: str = typer.Argument(..., help="Text to analyze for sentiment."),
@@ -68,38 +77,76 @@ def analyze(
 def batch(
     file: Path = typer.Argument(..., help="Path to CSV file with a 'text' column.", exists=True),
     engine: str = typer.Option("ensemble", "--engine", "-e", help="Engine to use."),
+    chunk_size: int = typer.Option(500, "--chunk-size", "-c", help="Rows per processing chunk."),
 ):
-    """Process a CSV file of text samples."""
+    """Process a CSV file of text samples with streaming.
+
+    Streams the CSV row-by-row so arbitrarily large files (GB-scale) work
+    without loading everything into memory.
+    """
     eng = _get_engine(engine)
+    file_size = file.stat().st_size
 
-    with open(file, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = [row["text"].strip() for row in reader if row.get("text", "").strip()]
+    typer.echo(f"File:    {file.name} ({_format_size(file_size)})")
+    typer.echo(f"Engine:  {engine}")
+    typer.echo(f"Chunk:   {chunk_size} rows\n")
 
-    if not rows:
-        typer.echo("No valid 'text' rows found in CSV.", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Processing {len(rows)} rows with {engine}...\n")
-
-    counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    counts: dict[str, int] = {"Positive": 0, "Negative": 0, "Neutral": 0}
+    total_rows = 0
     start = time.perf_counter()
 
-    async def run_all():
-        for i, text in enumerate(rows, 1):
-            result = await eng.predict(text)
-            counts[result.label] = counts.get(result.label, 0) + 1
-            if i % 100 == 0 or i == len(rows):
-                typer.echo(f"  [{i}/{len(rows)}] processed")
+    async def process_streaming():
+        nonlocal total_rows
+        chunk: list[str] = []
 
-    asyncio.run(run_all())
+        with open(file, "r", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                text = row.get("text", "").strip()
+                if not text:
+                    continue
+                chunk.append(text)
+
+                if len(chunk) >= chunk_size:
+                    await _process_chunk(eng, chunk, counts)
+                    total_rows += len(chunk)
+                    elapsed = time.perf_counter() - start
+                    rate = total_rows / elapsed if elapsed > 0 else 0
+                    typer.echo(
+                        f"  [{total_rows:,} rows]  {rate:,.0f} samples/sec  "
+                        f"{_format_size(int(total_rows * (file_size / max(total_rows, 1))))} processed"
+                    )
+                    chunk = []
+
+            if chunk:
+                await _process_chunk(eng, chunk, counts)
+                total_rows += len(chunk)
+
+    asyncio.run(process_streaming())
     elapsed = time.perf_counter() - start
+    rate = total_rows / elapsed if elapsed > 0 else 0
 
-    typer.echo(f"\nResults ({len(rows)} samples in {elapsed:.2f}s):")
-    typer.echo(f"  Throughput: {len(rows)/elapsed:.1f} samples/sec")
+    typer.echo(f"\n{'=' * 60}")
+    typer.echo(f"Completed: {total_rows:,} rows in {elapsed:.2f}s")
+    typer.echo(f"File size: {_format_size(file_size)}")
+    typer.echo(f"Throughput: {rate:,.0f} samples/sec")
+    typer.echo(f"{'=' * 60}")
     for label, count in sorted(counts.items()):
-        pct = (count / len(rows)) * 100
-        typer.echo(f"  {label:<10s}  {count:>5d}  ({pct:.1f}%)")
+        pct = (count / total_rows) * 100 if total_rows else 0
+        typer.echo(f"  {label:<10s}  {count:>7,d}  ({pct:.1f}%)")
+
+
+async def _process_chunk(eng: SentimentEngine, texts: list[str], counts: dict[str, int]):
+    """Process a chunk of texts concurrently."""
+    semaphore = asyncio.Semaphore(10)
+
+    async def predict(text: str):
+        async with semaphore:
+            return await eng.predict(text)
+
+    results = await asyncio.gather(*[predict(t) for t in texts])
+    for r in results:
+        counts[r.label] = counts.get(r.label, 0) + 1
 
 
 @app.command()
